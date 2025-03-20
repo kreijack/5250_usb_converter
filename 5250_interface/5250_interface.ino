@@ -84,7 +84,6 @@ void setup()
 
 }
 
-
 //Function utilities
 //
 //
@@ -119,20 +118,6 @@ int transmit(boolean value, unsigned long lastCycles)
   return cyclesTx;
 }
 
-
-
-//Delays processing for the specified number of clock cycles
-void delayCycles(unsigned long cycles)
-{
-  unsigned long  cyclesInicio = ARM_DWT_CYCCNT;
-  unsigned long  cyclesCurrent = cyclesInicio;
-  while (cyclesCurrent - cyclesInicio < cycles)
-  {
-    cyclesCurrent = ARM_DWT_CYCCNT;
-  }
-}
-
-
 //End a transmission and leave the bus in steady state
 void endTx(unsigned long lastCycles)
 {
@@ -165,471 +150,438 @@ void endTx(unsigned long lastCycles)
 
 }
 
+static inline void read_from_serial(word *bufferRX, bool &waitForResponse, int &index)
+{
+  if (!Serial.available())
+    return;
 
-//MAIN LOOP
-void loop() // run over and over
+  const int length = MAX_FRAMES_RX * 2;
+  char buffer [length + 10];
+  char termChar = '\n';
+
+  index = 0;
+
+  //eotxPending = true;
+  int numCharsRecv = Serial.readBytesUntil(termChar, buffer, length);
+  if (!numCharsRecv) {
+    digitalWriteFast(PIN_OVERFLOW, HIGH);
+    return;
+
+  }
+
+  buffer[numCharsRecv] = '\0';
+  String mystring(buffer);
+
+  if (ENABLEDEBUG) Serial.print("[DEBUG] RECEIVED : ");
+  if (ENABLEDEBUG) Serial.print(numCharsRecv, DEC);
+  if (ENABLEDEBUG) Serial.print(" CHARS ");
+
+  //Serial.print(mystring);
+  waitForResponse = true;
+
+  //Process buffer to decode and split into frames
+  int i = 0;
+  index = 0;
+  while (i < numCharsRecv)
+  {
+    bufferRX[index] = (buffer[i] & 0x3f) | ((buffer[i + 1] & 0x1F) << 6);
+    if (ENABLEDEBUG) Serial.print(" DECODED : ");
+    if (ENABLEDEBUG) Serial.print(bufferRX[index], BIN );
+
+    i += 2;
+    index++;
+  }
+  if (ENABLEDEBUG) Serial.println("");
+  digitalWriteFast(PIN_OVERFLOW, LOW);
+
+}
+
+static inline void write_to_5250(word *bufferRX, int index)
+{
+   if (index <= 0)
+    return;
+
+  //Transmitting start sequence
+  //0b0101010101000111 in sequenceStart
+  int lastClock = 0;
+
+  for (int i = 0; i < 16; i++)
+  {
+    lastClock = transmit(bitRead(sequenceStart, 15 - i), lastClock);
+  }
+
+  //Data transmission
+  for (int i = 0; i < index; i++)
+  {
+    //Conditioning buffer with sync, fill and parity
+    //sync
+    bufferRX[i] <<= 1;
+    bitWrite(bufferRX[i], 0, 1);
+
+    //fill
+    bitWrite(bufferRX[i], 12, 0);
+    bitWrite(bufferRX[i], 13, 0);
+    bitWrite(bufferRX[i], 14, 0);
+    bitWrite(bufferRX[i], 15, 0);
+
+    //parity
+    int parityBit = 0;
+    //if ((bufferRX[i] & 1) == 0)
+    if ((parity_even_bit(bufferRX[i]) && ! parity_even_bit(bufferRX[i] >> 8))  ||  (!parity_even_bit(bufferRX[i]) && parity_even_bit(bufferRX[i] >> 8)))
+    {
+      parityBit = 1;
+    }
+    bitWrite(bufferRX[i], 12, parityBit);
+
+    //Transmission for each bit
+    for (int j = 0; j < 16; j++)
+    {
+      //First half bit, reversed
+      lastClock = transmit(!bitRead(bufferRX[i], j), lastClock);
+
+      //Second half bit
+      lastClock = transmit(bitRead(bufferRX[i], j), lastClock);
+    }
+  }
+
+  endTx(lastClock);
+}
+
+static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int indexTx)
 {
 
+  if (ENABLEDEBUG) Serial.print("[DEBUG] SENDING : ");
+  if (ENABLEDEBUG) Serial.println(indexTx, DEC);
+
+  for (int i = 0; i < indexTx; i++) {
+    //halfBitsDataTx[i] = 0b1011100001111000;
+    //0b1011100001111000
+
+    byte firstByte = 0x40 | ((halfBitsDataTx[i] >> 9) & 0x3F ) ;
+    byte secondByte = 0x40 | (( halfBitsDataTx[i] >> 4) & 0x1F ) ;
+
+    if (ENABLEDEBUG) {
+      Serial.print("[DEBUG] EVEN ");
+      for (int j = 0; j < 16; j++)
+      {
+        if (halfBitsDataTx[i] < pow(2, j))
+          Serial.print("0");
+      }
+
+      Serial.println(halfBitsDataTx[i], BIN);
+
+      Serial.print("[DEBUG]  ODD ");
+
+      for (int j = 0; j < 16; j++)
+      {
+        if (halfBitsDataCheckTx[i] < pow(2, j))
+          Serial.print("0");
+      }
+      Serial.println(halfBitsDataCheckTx[i], BIN);
+    }
+
+    Serial.print((char)firstByte);
+    Serial.print((char)secondByte);
+    Serial.println("");
+
+  }
+
+}
+
+static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int &indexTx, bool waitForResponse)
+{
+  unsigned int halfBitsDataEven = 0;
+  unsigned int halfBitsDataOdd = 0;
   uint8_t sampleRead;
   int consecutiveSamples = 0;
   uint8_t sampleActive = HIGH;
   word sequenceStartReceived = 0;
   boolean receptionIsActive = false;
   unsigned int halfBitsData = 0;
-  unsigned int halfBitsDataEven = 0;
-  unsigned int halfBitsDataOdd = 0;
-  unsigned int halfBitsDataTx[300];
-  unsigned int halfBitsDataCheckTx[300];
   int halfBitsDataReceived = 0;
-
-  unsigned long  cyclesPrevious;
+  unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
   unsigned long  cyclesCurrent = ARM_DWT_CYCCNT;
-  word bufferRX[300];
-  int index = 0;
-  int indexTx = 0;
-  boolean waitForResponse = false;
+  unsigned long  cyclesPrevious = cyclesCurrent;
+  bool err = false;
 
-  while (true)
+  //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
+  while (receptionIsActive || (waitForResponse  && (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX)))  // WAIT_CYCLES_RX = 30000
   {
-    //noInterrupts();
-    //Check receive line
 
-    //Enable interrupts for serial port
-    interrupts();
-
-    int length = 480;
-    char buffer [480];
-    char termChar = '\n';
-    int numCharsRecv = 0;
-    //boolean eotxPending = false;
-
-
-
-    //Reception from serial port
-    //
-    //
-    //
-    if (Serial.available())
+    //End earlier if no response expected
+    if (! receptionIsActive && Serial.available() && ((cyclesCurrent -  cyclesBeginReception) >= WAIT_CYCLES_RX_PENDING_TX)) // WAIT_CYCLES_RX_PENDING_TX = 5000
     {
-      //noInterrupts();
-
-      //eotxPending = true;
-      int numCharsRecv = Serial.readBytesUntil(termChar, buffer, length);
-      if (numCharsRecv)
-      {
-        buffer[numCharsRecv] = '\0';
-        String mystring(buffer);
-
-        if (ENABLEDEBUG) Serial.print("[DEBUG] RECEIVED : ");
-        if (ENABLEDEBUG) Serial.print(numCharsRecv, DEC);
-        if (ENABLEDEBUG) Serial.print(" CHARS ");
-
-        //Serial.print(mystring);
-        waitForResponse = true;
-
-        //Process buffer to decode and split into frames
-        int i = 0;
-        index = 0;
-        while (i < numCharsRecv)
-        {
-          bufferRX[index] = (buffer[i] & 0x3f) | ((buffer[i + 1] & 0x1F) << 6);
-          if (ENABLEDEBUG) Serial.print(" DECODED : ");
-          if (ENABLEDEBUG) Serial.print(bufferRX[index], BIN );
-
-          i += 2;
-          index++;
-        }
-        if (ENABLEDEBUG) Serial.println("");
-        digitalWriteFast(PIN_OVERFLOW, LOW);
-      }
-
-      else
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-      }
-
+      break;
     }
 
-    //bufferRX[0] = 0b00110000110;
-    //bufferRX[1] =  0;
-
-
-    //End serial reception
-
-    //Start of timing-critical stuff, so we disable interruptions
-    noInterrupts();
-
-    //Variable to set if we need to tx [EOF] at the end of this processing cycle
-    boolean signalEndTx = false;
-
-
-
-    //Transmit data to the 5250 if pending data
-    //
-    //
-    //
-    if (index > 0)
-    {
-      //Transmitting start sequence
-      //0b0101010101000111 in sequenceStart
-      int lastClock = 0;
-
-      for (int i = 0; i < 16; i++)
-      {
-        lastClock = transmit(bitRead(sequenceStart, 15 - i), lastClock);
-      }
-
-
-      //Data transmission
-      for (int i = 0; i < index; i++)
-      {
-        //Conditioning buffer with sync, fill and parity
-        //sync
-        bufferRX[i] <<= 1;
-        bitWrite(bufferRX[i], 0, 1);
-
-        //fill
-        bitWrite(bufferRX[i], 12, 0);
-        bitWrite(bufferRX[i], 13, 0);
-        bitWrite(bufferRX[i], 14, 0);
-        bitWrite(bufferRX[i], 15, 0);
-
-        //parity
-        int parityBit = 0;
-        //if ((bufferRX[i] & 1) == 0)
-        if ((parity_even_bit(bufferRX[i]) && ! parity_even_bit(bufferRX[i] >> 8))  ||  (!parity_even_bit(bufferRX[i]) && parity_even_bit(bufferRX[i] >> 8)))
-        {
-          parityBit = 1;
-        }
-        bitWrite(bufferRX[i], 12, parityBit);
-
-        //Transmission for each bit
-        for (int j = 0; j < 16; j++)
-        {
-          //First half bit, reversed
-          lastClock = transmit(!bitRead(bufferRX[i], j), lastClock);
-
-          //Second half bit
-          lastClock = transmit(bitRead(bufferRX[i], j), lastClock);
-        }
-      }
-
-      index = 0;
-
-      endTx(lastClock);
-
-      //We have transmitted something, so we need to generate later [EOTX] over the serial port
-      signalEndTx = true;
-
-    }
-    //End of transmission to 5250
-
-
-
-
-
-
-
-    //reception from 5250
-    //
-    //
-    //
-    //
-    halfBitsDataEven = 0;
-    halfBitsDataOdd = 0;
-    unsigned long   cyclesReception = ARM_DWT_CYCCNT;
     cyclesCurrent = ARM_DWT_CYCCNT;
+
+    if (cyclesCurrent - cyclesPrevious >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
+    {
+      //Processing has been too slow, light LED and inform
+      digitalWriteFast(PIN_OVERFLOW, HIGH);
+      Serial.print("[DEBUG] ERROR, PROCESSING TOO SLOW ");
+      Serial.println(cyclesCurrent - cyclesPrevious, DEC);
+      err = true;
+      break;
+    }
+
+    //Wait till it's time to get another sample from RX-DAT-INV
+    while (cyclesCurrent - cyclesPrevious < WAIT_CYCLES_RX_SAMPLE) // WAIT_CYCLES_RX_SAMPLE = 85
+    {
+      cyclesCurrent = ARM_DWT_CYCCNT;
+    }
+
+    //Sample RX-DAT-INV
+    sampleRead = digitalReadFast(PIN_IN);
+
     cyclesPrevious = cyclesCurrent;
 
-    //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-    while (receptionIsActive || (waitForResponse  && (cyclesCurrent -  cyclesReception < WAIT_CYCLES_RX)))
+    //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
+    //Otherwise we have a sync error
+    switch (consecutiveSamples)
     {
 
-      //End earlier if no response expected
-      if (! receptionIsActive && Serial.available() && ((cyclesCurrent -  cyclesReception) >= WAIT_CYCLES_RX_PENDING_TX))
-      {
+      case 0:
+        //New half-bit
+        sampleActive = sampleRead;
+        consecutiveSamples++;
         break;
-      }
 
-
-      cyclesCurrent = ARM_DWT_CYCCNT;
-
-      if (cyclesCurrent - cyclesPrevious >= WAIT_CYCLES_RX_SAMPLE)
-      {
-        //Processing has been too slow, light LED and inform
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        Serial.print("[DEBUG] ERROR, PROCESSING TOO SLOW ");
-        Serial.println(cyclesCurrent - cyclesPrevious, DEC);
-      }
-
-      //Wait till it's time to get another sample from RX-DAT-INV
-      while (cyclesCurrent - cyclesPrevious < WAIT_CYCLES_RX_SAMPLE)
-      {
-        cyclesCurrent = ARM_DWT_CYCCNT;
-      }
-
-      //Sample RX-DAT-INV
-      sampleRead = digitalReadFast(PIN_IN);
-
-
-
-      cyclesPrevious = cyclesCurrent;
-
-
-
-
-      //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
-      //Otherwise we have a sync error
-      switch (consecutiveSamples)
-      {
-
-        case 0:
-          //New half-bit
+      case 1:
+        //second sample
+        if (sampleActive != sampleRead)
+        {
+          //Out of sync!
           sampleActive = sampleRead;
+          consecutiveSamples = 1;
+        }
+        else
+        {
           consecutiveSamples++;
-          break;
+        }
+        break;
+      case 2:
 
-        case 1:
-          //second sample
-          if (sampleActive != sampleRead)
+        //third sample
+        if (sampleActive != sampleRead)
+        {
+          //Out of sync!
+          sampleActive = sampleRead;
+          consecutiveSamples = 1;
+        }
+        else
+        {
+
+          consecutiveSamples++;
+          //New half-bit!
+          if (!receptionIsActive)
           {
-            //Out of sync!
-            sampleActive = sampleRead;
-            consecutiveSamples = 1;
+            //Add half-bit to start sequence detection
+            sequenceStartReceived <<= 1;
+            sequenceStartReceived += sampleActive;
+
           }
           else
           {
-            consecutiveSamples++;
-          }
-          break;
-        case 2:
 
-          //third sample
-          if (sampleActive != sampleRead)
-          {
-            //Out of sync!
-            sampleActive = sampleRead;
-            consecutiveSamples = 1;
-          }
-          else
-          {
+            //Already got start sequence, add to received data, odd or even half bits
+            halfBitsDataReceived++;
+            halfBitsData <<= 1;
+            halfBitsData += sampleActive;
 
-            consecutiveSamples++;
-            //New half-bit!
-            if (!receptionIsActive)
+            //If we are starting a frame wait till the first even half bit is 0
+            if (halfBitsDataReceived == 2 && sampleActive == 0) {
+              halfBitsDataReceived = 0;
+              halfBitsDataEven = 0;
+              halfBitsDataOdd = 0;
+              halfBitsData = 0;
+              break;
+            }
+
+            if ((halfBitsDataReceived % 2) == 0)
             {
-              //Add half-bit to start sequence detection
-              sequenceStartReceived <<= 1;
-              sequenceStartReceived += sampleActive;
-
+              halfBitsDataEven <<= 1;
+              halfBitsDataEven += sampleActive;
             }
             else
             {
+              halfBitsDataOdd <<= 1;
+              halfBitsDataOdd += sampleActive;
+            }
 
-              //Already got start sequence, add to received data, odd or even half bits
-              halfBitsDataReceived++;
-              halfBitsData <<= 1;
-              halfBitsData += sampleActive;
-
-              //If we are starting a frame wait till the first even half bit is 0
-              if (halfBitsDataReceived == 2 && sampleActive == 0) {
-                halfBitsDataReceived = 0;
-                halfBitsDataEven = 0;
-                halfBitsDataOdd = 0;
-                halfBitsData = 0;
-                break;
-              }
-
-              if ((halfBitsDataReceived % 2) == 0)
-              {
-                halfBitsDataEven <<= 1;
-                halfBitsDataEven += sampleActive;
-              }
-              else
-              {
-                halfBitsDataOdd <<= 1;
-                halfBitsDataOdd += sampleActive;
-              }
-
-              if (halfBitsDataReceived == 32)
-              {
-                //We have received a full frame
-                halfBitsDataTx[indexTx] = halfBitsDataEven;
-                halfBitsDataCheckTx[indexTx] = halfBitsDataOdd;
-                indexTx++;
-                halfBitsDataReceived = 0;
-                halfBitsData = 0;
-                halfBitsDataEven = 0;
-                halfBitsDataOdd = 0;
-              }
+            if (halfBitsDataReceived == 32)
+            {
+              //We have received a full frame
+              halfBitsDataTx[indexTx] = halfBitsDataEven;
+              halfBitsDataCheckTx[indexTx] = halfBitsDataOdd;
+              indexTx++;
+              halfBitsDataReceived = 0;
+              halfBitsData = 0;
+              halfBitsDataEven = 0;
+              halfBitsDataOdd = 0;
             }
           }
-          break;
+        }
+        break;
 
-        case 3:
-          //fourth and last value of half-bit
-          if (sampleActive != sampleRead)
-          {
-            sampleActive = sampleRead;
-            consecutiveSamples = 1;
-          }
-          else
-          {
-            consecutiveSamples = 1;
-          }
-          break;
+      case 3:
+        //fourth and last value of half-bit
+        if (sampleActive != sampleRead)
+        {
+          sampleActive = sampleRead;
+          consecutiveSamples = 1;
+        }
+        else
+        {
+          consecutiveSamples = 1;
+        }
+        break;
+    }
+
+    //Check if we have received start sequence
+    if (!receptionIsActive)
+    {
+
+      if ((sequenceStartReceived & 0xFFFF) == sequenceStart)
+      {
+        //Signal that we are now sampling the data frame
+        receptionIsActive = true;
+        //Reset holder
+        sequenceStartReceived = 0;
+      }
+    }
+
+    else
+    {
+      //Check if we have stop sequence (Address 7)
+      if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskEnd) == sequenceEnd)
+      {
+        //No more reception
+        receptionIsActive = false;
+        waitForResponse = false;
       }
 
-
-
-      //Check if we have received start sequence
-      if (!receptionIsActive)
-      {
-
-        if ((sequenceStartReceived & 0xFFFF) == sequenceStart)
+      //Now some error checking
+      /*
+        //Parity error detection, commented out as it is too slow to run without overclocking
+        if (indexTx > 0)
         {
-          //Signal that we are now sampling the data frame
-          receptionIsActive = true;
-          //Reset holder
-          sequenceStartReceived = 0;
+        unsigned int parityBit=0;
+        word toCheck = halfBitsDataTx[indexTx-1] <<1 >>5;
+          //if ((toCheck & 1) == 0)
+
+          unsigned int check1 = parity_even_bit(toCheck);
+          unsigned int check2 = parity_even_bit(toCheck >> 8);
+
+          if ((check1 && ! check2)  ||  (!check1 && check2))
+          {
+            parityBit=1;//TBD
+          }
+
+          if (bitRead(halfBitsDataTx[indexTx-1], 3) != parityBit)
+          {
+            //Parity error, light LED
+            Serial.println("[DEBUG] PARITY ERROR");
+            digitalWriteFast(PIN_OVERFLOW, HIGH);
+            receptionIsActive=false;
+            waitForResponse=false;
+          }
         }
+      */
+
+      //Detect too many frames (unlikely)
+      if (indexTx > MAX_FRAMES_RX)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        Serial.println("[DEBUG] MAX FRAMES ERROR");
+        err = true;
+        break;
       }
 
-      else
+      //Detection of incorrect frame alignment, light LED
+      if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskFrame) != sequenceFrameOdd)
       {
-        //Check if we have stop sequence (Address 7)
-        if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskEnd) == sequenceEnd)
-        {
-          //No more reception
-          receptionIsActive = false;
-          waitForResponse = false;
-        }
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        Serial.println("[DEBUG] SYNC ERROR ODD");
+        err = true;
+        break;
+      }
 
+      if (indexTx > 0 && (halfBitsDataCheckTx[indexTx - 1] & maskFrame) != sequenceFrameEven)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        Serial.println("[DEBUG] SYNC ERROR EVEN");
+        err = true;
+        break;
+      }
 
-        //Now some error checking
-        /*
-          //Parity error detection, commented out as it is too slow to run without overclocking
-          if (indexTx > 0)
-          {
-          unsigned int parityBit=0;
-          word toCheck = halfBitsDataTx[indexTx-1] <<1 >>5;
-            //if ((toCheck & 1) == 0)
-
-            unsigned int check1 = parity_even_bit(toCheck);
-            unsigned int check2 = parity_even_bit(toCheck >> 8);
-
-            if ((check1 && ! check2)  ||  (!check1 && check2))
-            {
-             parityBit=1;//TBD
-            }
-
-            if (bitRead(halfBitsDataTx[indexTx-1], 3) != parityBit)
-            {
-              //Parity error, light LED
-              Serial.println("[DEBUG] PARITY ERROR");
-              digitalWriteFast(PIN_OVERFLOW, HIGH);
-              receptionIsActive=false;
-              waitForResponse=false;
-            }
-          }
-        */
-
-        //Detect too many frames (unlikely)
-        if (indexTx > MAX_FRAMES_RX)
-        {
-          digitalWriteFast(PIN_OVERFLOW, HIGH);
-          Serial.println("[DEBUG] MAX FRAMES ERROR");
-          receptionIsActive = false;
-          waitForResponse = false;
-          indexTx = 0;
-        }
-
-        //Detection of incorrect frame alignment, light LED
-        if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskFrame) != sequenceFrameOdd)
-        {
-          digitalWriteFast(PIN_OVERFLOW, HIGH);
-          Serial.println("[DEBUG] SYNC ERROR ODD");
-          receptionIsActive = false;
-          waitForResponse = false;
-          indexTx = 0;
-        }
-
-        if (indexTx > 0 && (halfBitsDataCheckTx[indexTx - 1] & maskFrame) != sequenceFrameEven)
-        {
-          digitalWriteFast(PIN_OVERFLOW, HIGH);
-          Serial.println("[DEBUG] SYNC ERROR EVEN");
-          receptionIsActive = false;
-          waitForResponse = false;
-          indexTx = 0;
-        }
-
-        /*Detect incorrect intrabit transitions, commented out as it is too slow to run without overclocking
-          if (indexTx > 0 && (halfBitsDataTx[indexTx-1] ^ halfBitsDataCheckTx[indexTx-1]) != checkTransitions)
-          {
-          digitalWriteFast(PIN_OVERFLOW, HIGH);
-          Serial.println("ERROR TRANSICIONES");
-          Serial.println(indexTx,DEC);
-          receptionIsActive=false;
-          waitForResponse=false;
-          }*/
-
+      // Detect incorrect intrabit transitions, commented out as it is too slow to run without overclocking
+      if (indexTx > 0 && (halfBitsDataTx[indexTx-1] ^ halfBitsDataCheckTx[indexTx-1]) != checkTransitions)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        Serial.println("ERROR TRANSICIONES");
+        Serial.println(indexTx,DEC);
+        err = true;
+        break;
       }
 
     }
+  }
 
-    waitForResponse = false;
-    //End reception from 5250
-
-
-
-
-
-
-    //Transmission to serial
-    //
-    //
-    //
-    if (indexTx > 0)
+  if (err) {
+    indexTx = 0;
+    while (cyclesCurrent - cyclesPrevious < WAIT_CYCLES_RX_PENDING_TX) // WAIT_CYCLES_RX_SAMPLE = 85
     {
-      interrupts();
+      cyclesCurrent = ARM_DWT_CYCCNT;
+    }
+  }
+}
 
-      if (ENABLEDEBUG) Serial.print("[DEBUG] SENDING : ");
-      if (ENABLEDEBUG) Serial.println(indexTx, DEC);
+//MAIN LOOP
+void loop() // run over and over
+{
+  while (true)
+  {
 
-      for (int i = 0; i < indexTx; i++) {
-        //halfBitsDataTx[i] = 0b1011100001111000;
-        //0b1011100001111000
+    boolean waitForResponse = false;
+    boolean signalEndTx = false;
+    {
+        word bufferRX[MAX_FRAMES_RX+10];
+        int lenRx = 0;
 
-        byte firstByte = 0x40 | ((halfBitsDataTx[i] >> 9) & 0x3F ) ;
-        byte secondByte = 0x40 | (( halfBitsDataTx[i] >> 4) & 0x1F ) ;
+        //Enable interrupts for serial port
+        interrupts();
 
-        if (ENABLEDEBUG) {
-          Serial.print("[DEBUG] EVEN ");
-          for (int j = 0; j < 16; j++)
-          {
-            if (halfBitsDataTx[i] < pow(2, j))
-              Serial.print("0");
-          }
+        //Reception from serial port
+        read_from_serial(bufferRX, waitForResponse, lenRx);
 
-          Serial.println(halfBitsDataTx[i], BIN);
+        //Start of timing-critical stuff, so we disable interruptions
+        noInterrupts();
 
-          Serial.print("[DEBUG]  ODD ");
-
-          for (int j = 0; j < 16; j++)
-          {
-            if (halfBitsDataCheckTx[i] < pow(2, j))
-              Serial.print("0");
-          }
-          Serial.println(halfBitsDataCheckTx[i], BIN);
+        //Transmit data to the 5250 if pending data
+        //Variable to set if we need to tx [EOF] at the end of this processing cycle
+        if (lenRx > 0) {
+          write_to_5250(bufferRX, lenRx);
+          //We have transmitted something, so we need to generate later [EOTX] over the serial port
+          signalEndTx = true;
         }
+    }
 
-        Serial.print((char)firstByte);
-        Serial.print((char)secondByte);
-        Serial.println("");
+    {
 
+      unsigned int halfBitsDataTx[MAX_FRAMES_RX+10];
+      unsigned int halfBitsDataCheckTx[MAX_FRAMES_RX+10];
+      int lenTx = 0;
+
+      read_from_5250(halfBitsDataTx, halfBitsDataCheckTx, lenTx, waitForResponse);
+
+      //Transmission to serial
+      if (lenTx > 0)
+      {
+        interrupts();
+        write_to_serial(halfBitsDataTx, halfBitsDataCheckTx, lenTx);
       }
-
-      indexTx = 0;
     }
 
     if (signalEndTx)
@@ -638,7 +590,6 @@ void loop() // run over and over
       Serial.println("[EOTX]");
     }
 
-    //End of transmission to Serial
     //And start of another processing cycle till the end of the universe
 
   }
