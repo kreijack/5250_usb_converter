@@ -54,7 +54,7 @@ const int PIN_IN = 7;
 
 //Enable dverbose debug over serial connection, not recommended for stable operation
 const int ENABLEDEBUG = 0;
-
+char msg_debug[1000] = {0};
 
 //Initialize things
 void setup()
@@ -288,7 +288,7 @@ static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *h
 
 }
 
-static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int &indexTx, bool waitForResponse)
+static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int &indexTx)
 {
   unsigned int halfBitsDataEven = 0;
   unsigned int halfBitsDataOdd = 0;
@@ -297,15 +297,14 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
   uint8_t sampleActive = HIGH;
   word sequenceStartReceived = 0;
   boolean receptionIsActive = false;
-  unsigned int halfBitsData = 0;
   int halfBitsDataReceived = 0;
   unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
   unsigned long  cyclesCurrent = ARM_DWT_CYCCNT;
   unsigned long  cyclesPrevious = cyclesCurrent;
   bool err = false;
 
-  //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-  while (receptionIsActive || (waitForResponse  && (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX)))  // WAIT_CYCLES_RX = 30000
+    //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
+  while (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX))  // WAIT_CYCLES_RX = 30000
   {
 
     //End earlier if no response expected
@@ -320,8 +319,12 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
     {
       //Processing has been too slow, light LED and inform
       digitalWriteFast(PIN_OVERFLOW, HIGH);
-      Serial.print("[DEBUG] ERROR, PROCESSING TOO SLOW ");
-      Serial.println(cyclesCurrent - cyclesPrevious, DEC);
+      //Serial.print("[DEBUG] ERROR, PROCESSING TOO SLOW ");
+      //Serial.println(cyclesCurrent - cyclesPrevious, DEC);
+      snprintf(msg_debug, sizeof msg_debug - 1,
+            "[DEBUG] ERROR, PROCESSING TOO SLOW %lu",
+            cyclesCurrent - cyclesPrevious);
+
       err = true;
       break;
     }
@@ -387,15 +390,12 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
 
             //Already got start sequence, add to received data, odd or even half bits
             halfBitsDataReceived++;
-            halfBitsData <<= 1;
-            halfBitsData += sampleActive;
 
             //If we are starting a frame wait till the first even half bit is 0
             if (halfBitsDataReceived == 2 && sampleActive == 0) {
               halfBitsDataReceived = 0;
               halfBitsDataEven = 0;
               halfBitsDataOdd = 0;
-              halfBitsData = 0;
               break;
             }
 
@@ -417,7 +417,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
               halfBitsDataCheckTx[indexTx] = halfBitsDataOdd;
               indexTx++;
               halfBitsDataReceived = 0;
-              halfBitsData = 0;
               halfBitsDataEven = 0;
               halfBitsDataOdd = 0;
             }
@@ -458,36 +457,37 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
       if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskEnd) == sequenceEnd)
       {
         //No more reception
-        receptionIsActive = false;
-        waitForResponse = false;
+        break;
       }
 
       //Now some error checking
       /*
-        //Parity error detection, commented out as it is too slow to run without overclocking
-        if (indexTx > 0)
+
+      //Parity error detection, commented out as it is too slow to run without overclocking
+
+      if (indexTx > 0)
+      {
+      unsigned int parityBit=0;
+      word toCheck = halfBitsDataTx[indexTx-1] <<1 >>5;
+        //if ((toCheck & 1) == 0)
+
+        unsigned int check1 = parity_even_bit(toCheck);
+        unsigned int check2 = parity_even_bit(toCheck >> 8);
+
+        if ((check1 && ! check2)  ||  (!check1 && check2))
         {
-        unsigned int parityBit=0;
-        word toCheck = halfBitsDataTx[indexTx-1] <<1 >>5;
-          //if ((toCheck & 1) == 0)
-
-          unsigned int check1 = parity_even_bit(toCheck);
-          unsigned int check2 = parity_even_bit(toCheck >> 8);
-
-          if ((check1 && ! check2)  ||  (!check1 && check2))
-          {
-            parityBit=1;//TBD
-          }
-
-          if (bitRead(halfBitsDataTx[indexTx-1], 3) != parityBit)
-          {
-            //Parity error, light LED
-            Serial.println("[DEBUG] PARITY ERROR");
-            digitalWriteFast(PIN_OVERFLOW, HIGH);
-            receptionIsActive=false;
-            waitForResponse=false;
-          }
+          parityBit=1;//TBD
         }
+
+        if (bitRead(halfBitsDataTx[indexTx-1], 3) != parityBit)
+        {
+          //Parity error, light LED
+          Serial.println("[DEBUG] PARITY ERROR");
+          digitalWriteFast(PIN_OVERFLOW, HIGH);
+          err = true;
+          break;
+        }
+      }
       */
 
       //Detect too many frames (unlikely)
@@ -536,6 +536,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
       cyclesCurrent = ARM_DWT_CYCCNT;
     }
   }
+
 }
 
 //MAIN LOOP
@@ -568,13 +569,13 @@ void loop() // run over and over
         }
     }
 
-    {
+    if (waitForResponse) {
 
       unsigned int halfBitsDataTx[MAX_FRAMES_RX+10];
       unsigned int halfBitsDataCheckTx[MAX_FRAMES_RX+10];
       int lenTx = 0;
 
-      read_from_5250(halfBitsDataTx, halfBitsDataCheckTx, lenTx, waitForResponse);
+      read_from_5250(halfBitsDataTx, halfBitsDataCheckTx, lenTx);
 
       //Transmission to serial
       if (lenTx > 0)
@@ -582,6 +583,12 @@ void loop() // run over and over
         interrupts();
         write_to_serial(halfBitsDataTx, halfBitsDataCheckTx, lenTx);
       }
+    }
+
+    if (msg_debug[0]) {
+      interrupts();
+      Serial.println(msg_debug);
+      msg_debug[0]=0;
     }
 
     if (signalEndTx)
