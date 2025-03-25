@@ -531,7 +531,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
 
   if (err) {
     indexTx = 0;
-    while (cyclesCurrent - cyclesPrevious < WAIT_CYCLES_RX_PENDING_TX) // WAIT_CYCLES_RX_SAMPLE = 85
+    while (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX) // WAIT_CYCLES_RX = 30000
     {
       cyclesCurrent = ARM_DWT_CYCCNT;
     }
