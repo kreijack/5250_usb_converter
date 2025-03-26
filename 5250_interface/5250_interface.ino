@@ -1,5 +1,6 @@
 
 #include  <util/parity.h>
+#include <stdarg.h>
 
 //WATCH OUT!!
 //For receiving we are processing the INVERTED Manchester signal
@@ -288,6 +289,29 @@ static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *h
 
 }
 
+#define RESIDUAL_CYCLES_LOG
+#define TIMEOUT_CHECK_RESIDUAL_CYCLES 10000
+
+static inline void debug_message(const char *msg, ...)
+{
+
+  unsigned int l = strlen(msg_debug);
+  /* to avoid sign problem with unsigned integer */
+  if (l > sizeof msg_debug - 10)
+    return;
+  if (l > 0)
+  {
+    snprintf(msg_debug + l, sizeof(msg_debug) - 1 - l, "  ");
+    l += 2;
+  }
+
+  va_list ap;
+  va_start(ap, msg);
+  vsnprintf(msg_debug + l , sizeof(msg_debug) - 1 - l ,
+        msg, ap);
+  va_end(ap);
+}
+
 static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int &indexTx)
 {
   unsigned int halfBitsDataEven = 0;
@@ -303,6 +327,11 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
   unsigned long  cyclesPrevious = cyclesCurrent;
   bool err = false;
 
+#ifdef RESIDUAL_CYCLES_LOG
+  static int check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
+  unsigned int residual_cycles = 0;
+#endif
+
     //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
   while (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX))  // WAIT_CYCLES_RX = 30000
   {
@@ -315,14 +344,19 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
 
     cyclesCurrent = ARM_DWT_CYCCNT;
 
+#ifdef RESIDUAL_CYCLES_LOG
+    residual_cycles = cyclesCurrent - cyclesPrevious;
+    if (--check_count < 0)
+    {
+        check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;       
+    }
+#endif
+
     if (cyclesCurrent - cyclesPrevious >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
     {
       //Processing has been too slow, light LED and inform
       digitalWriteFast(PIN_OVERFLOW, HIGH);
-      //Serial.print("[DEBUG] ERROR, PROCESSING TOO SLOW ");
-      //Serial.println(cyclesCurrent - cyclesPrevious, DEC);
-      snprintf(msg_debug, sizeof msg_debug - 1,
-            "[DEBUG] ERROR, PROCESSING TOO SLOW %lu",
+      debug_message("ERROR, PROCESSING TOO SLOW %lu",
             cyclesCurrent - cyclesPrevious);
 
       err = true;
@@ -460,68 +494,12 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
         break;
       }
 
-      //Now some error checking
-      /*
-
-      //Parity error detection, commented out as it is too slow to run without overclocking
-
-      if (indexTx > 0)
-      {
-      unsigned int parityBit=0;
-      word toCheck = halfBitsDataTx[indexTx-1] <<1 >>5;
-        //if ((toCheck & 1) == 0)
-
-        unsigned int check1 = parity_even_bit(toCheck);
-        unsigned int check2 = parity_even_bit(toCheck >> 8);
-
-        if ((check1 && ! check2)  ||  (!check1 && check2))
-        {
-          parityBit=1;//TBD
-        }
-
-        if (bitRead(halfBitsDataTx[indexTx-1], 3) != parityBit)
-        {
-          //Parity error, light LED
-          Serial.println("[DEBUG] PARITY ERROR");
-          digitalWriteFast(PIN_OVERFLOW, HIGH);
-          err = true;
-          break;
-        }
-      }
-      */
 
       //Detect too many frames (unlikely)
       if (indexTx > MAX_FRAMES_RX)
       {
         digitalWriteFast(PIN_OVERFLOW, HIGH);
-        Serial.println("[DEBUG] MAX FRAMES ERROR");
-        err = true;
-        break;
-      }
-
-      //Detection of incorrect frame alignment, light LED
-      if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskFrame) != sequenceFrameOdd)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        Serial.println("[DEBUG] SYNC ERROR ODD");
-        err = true;
-        break;
-      }
-
-      if (indexTx > 0 && (halfBitsDataCheckTx[indexTx - 1] & maskFrame) != sequenceFrameEven)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        Serial.println("[DEBUG] SYNC ERROR EVEN");
-        err = true;
-        break;
-      }
-
-      // Detect incorrect intrabit transitions, commented out as it is too slow to run without overclocking
-      if (indexTx > 0 && (halfBitsDataTx[indexTx-1] ^ halfBitsDataCheckTx[indexTx-1]) != checkTransitions)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        Serial.println("ERROR TRANSICIONES");
-        Serial.println(indexTx,DEC);
+        debug_message("MAX FRAMES ERROR");
         err = true;
         break;
       }
@@ -529,14 +507,81 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
     }
   }
 
+  if (!err)
+  {
+    for (int i = 0 ; i < indexTx ; i++)
+    {
+
+
+      //Now some error checking
+
+      //Parity error detection
+      unsigned int parityBit=0;
+      word toCheck = halfBitsDataTx[i] <<1 >>5;
+        //if ((toCheck & 1) == 0)
+
+      unsigned int check1 = parity_even_bit(toCheck);
+      unsigned int check2 = parity_even_bit(toCheck >> 8);
+
+      if ((check1 && ! check2)  ||  (!check1 && check2))
+      {
+        parityBit=1;//TBD
+      }
+
+      if (bitRead(halfBitsDataTx[i], 3) != parityBit)
+      {
+        //Parity error, light LED
+        debug_message("PARITY ERROR");
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        err = true;
+        break;
+      }
+
+      //Detection of incorrect frame alignment, light LED
+      if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        debug_message("SYNC ERROR ODD");
+        err = true;
+        break;
+      }
+
+      if ((halfBitsDataCheckTx[i] & maskFrame) != sequenceFrameEven)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        debug_message("SYNC ERROR EVEN");
+        err = true;
+        break;
+      }
+
+      // Detect incorrect intrabit transitions
+      if ((halfBitsDataTx[i] ^ halfBitsDataCheckTx[i]) != checkTransitions)
+      {
+        digitalWriteFast(PIN_OVERFLOW, HIGH);
+        debug_message("ERROR TRANSICIONES %d", indexTx);
+        err = true;
+        break;
+      }
+    }
+  }
+
+#ifdef RESIDUAL_CYCLES_LOG
+  if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 50)
+  {
+    debug_message("residual_cycles = %u",
+          residual_cycles);
+    residual_cycles = 0;
+  }
+#endif
+
   if (err) {
+    cyclesCurrent = ARM_DWT_CYCCNT;
     indexTx = 0;
     while (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX) // WAIT_CYCLES_RX = 30000
     {
       cyclesCurrent = ARM_DWT_CYCCNT;
     }
   }
-
 }
 
 //MAIN LOOP
@@ -587,6 +632,7 @@ void loop() // run over and over
 
     if (msg_debug[0]) {
       interrupts();
+      Serial.print("[DEBUG] ");
       Serial.println(msg_debug);
       msg_debug[0]=0;
     }
