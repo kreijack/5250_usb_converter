@@ -248,7 +248,7 @@ static inline void write_to_5250(word *bufferRX, int index)
   endTx(lastClock);
 }
 
-static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int indexTx)
+static inline void write_to_serial(unsigned int *halfBitsDataTx, int indexTx)
 {
 
   if (ENABLEDEBUG) Serial.print("[DEBUG] SENDING : ");
@@ -271,14 +271,6 @@ static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *h
 
       Serial.println(halfBitsDataTx[i], BIN);
 
-      Serial.print("[DEBUG]  ODD ");
-
-      for (int j = 0; j < 16; j++)
-      {
-        if (halfBitsDataCheckTx[i] < pow(2, j))
-          Serial.print("0");
-      }
-      Serial.println(halfBitsDataCheckTx[i], BIN);
     }
 
     Serial.print((char)firstByte);
@@ -289,7 +281,7 @@ static inline void write_to_serial(unsigned int *halfBitsDataTx, unsigned int *h
 
 }
 
-#define RESIDUAL_CYCLES_LOG
+//#define RESIDUAL_CYCLES_LOG
 #define TIMEOUT_CHECK_RESIDUAL_CYCLES 10000
 
 static inline void debug_message(const char *msg, ...)
@@ -312,13 +304,13 @@ static inline void debug_message(const char *msg, ...)
   va_end(ap);
 }
 
-static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *halfBitsDataCheckTx, int &indexTx)
+static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
 {
   unsigned int halfBitsDataEven = 0;
-  unsigned int halfBitsDataOdd = 0;
   uint8_t sampleRead;
   int consecutiveSamples = 0;
   uint8_t sampleActive = HIGH;
+  uint8_t oddSampleActive = HIGH;
   word sequenceStartReceived = 0;
   boolean receptionIsActive = false;
   int halfBitsDataReceived = 0;
@@ -333,7 +325,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
 #endif
 
     //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-  while (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX))  // WAIT_CYCLES_RX = 30000
+  while (!err && (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX)))  // WAIT_CYCLES_RX = 30000
   {
 
     //End earlier if no response expected
@@ -360,7 +352,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
             cyclesCurrent - cyclesPrevious);
 
       err = true;
-      break;
+      goto exit;
     }
 
     //Wait till it's time to get another sample from RX-DAT-INV
@@ -429,30 +421,37 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
             if (halfBitsDataReceived == 2 && sampleActive == 0) {
               halfBitsDataReceived = 0;
               halfBitsDataEven = 0;
-              halfBitsDataOdd = 0;
               break;
             }
 
             if ((halfBitsDataReceived % 2) == 0)
             {
+
+              // Detect incorrect intrabit transitions
+              if (oddSampleActive == sampleActive )
+              {
+                //prevSampleActive = sampleActive;
+                digitalWriteFast(PIN_OVERFLOW, HIGH);
+                debug_message("ERROR TRANSICIONES %d", indexTx);
+                err = true;
+                goto exit;
+              }
+
               halfBitsDataEven <<= 1;
               halfBitsDataEven += sampleActive;
             }
             else
             {
-              halfBitsDataOdd <<= 1;
-              halfBitsDataOdd += sampleActive;
+              oddSampleActive = sampleActive;
             }
 
             if (halfBitsDataReceived == 32)
             {
               //We have received a full frame
               halfBitsDataTx[indexTx] = halfBitsDataEven;
-              halfBitsDataCheckTx[indexTx] = halfBitsDataOdd;
               indexTx++;
               halfBitsDataReceived = 0;
               halfBitsDataEven = 0;
-              halfBitsDataOdd = 0;
             }
           }
         }
@@ -501,7 +500,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
         digitalWriteFast(PIN_OVERFLOW, HIGH);
         debug_message("MAX FRAMES ERROR");
         err = true;
-        break;
+        goto exit;
       }
 
     }
@@ -511,7 +510,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
   {
     for (int i = 0 ; i < indexTx ; i++)
     {
-
 
       //Now some error checking
 
@@ -546,24 +544,11 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, unsigned int *ha
         break;
       }
 
-      if ((halfBitsDataCheckTx[i] & maskFrame) != sequenceFrameEven)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        debug_message("SYNC ERROR EVEN");
-        err = true;
-        break;
-      }
-
-      // Detect incorrect intrabit transitions
-      if ((halfBitsDataTx[i] ^ halfBitsDataCheckTx[i]) != checkTransitions)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        debug_message("ERROR TRANSICIONES %d", indexTx);
-        err = true;
-        break;
-      }
     }
   }
+
+
+exit:
 
 #ifdef RESIDUAL_CYCLES_LOG
   if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 50)
@@ -617,16 +602,15 @@ void loop() // run over and over
     if (waitForResponse) {
 
       unsigned int halfBitsDataTx[MAX_FRAMES_RX+10];
-      unsigned int halfBitsDataCheckTx[MAX_FRAMES_RX+10];
       int lenTx = 0;
 
-      read_from_5250(halfBitsDataTx, halfBitsDataCheckTx, lenTx);
+      read_from_5250(halfBitsDataTx, lenTx);
 
       //Transmission to serial
       if (lenTx > 0)
       {
         interrupts();
-        write_to_serial(halfBitsDataTx, halfBitsDataCheckTx, lenTx);
+        write_to_serial(halfBitsDataTx, lenTx);
       }
     }
 
