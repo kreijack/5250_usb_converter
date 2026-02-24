@@ -980,6 +980,146 @@ scancodeDictionaries = {
         },
     },
 
+    '3486_122KEY_IT': {
+
+        # SPECIAL FUNCTION KEYS MAPPINGS
+        'CTRL_PRESS': [0x7e],
+        'CTRL_RELEASE': [],
+        'ALT_PRESS': [0x68],
+        'ALT_RELEASE': [],
+        'SHIFT_PRESS': [0x57, 0x56],
+        'SHIFT_RELEASE': [0xD7, 0xD6],
+        'CAPS_LOCK': [0x54],  # Reset
+        'EXTRA': [0x6F],
+
+        # LEFT FUNCTION KEYS MAPPINGS (F1-F10)
+        # KEYS FROM TOP TO BOTTOM AND FROM LEFT TO RIGHT
+        # ROW 1
+        0x7C: [chr(0x1B), chr(0x1B), '', ''],  # ESC
+        # TBD UP TO F10
+
+        # MAIN ALPHA BLOCK KEYS MAPPINGS
+        # KEYS FROM TOP TO BOTTOM AND FROM LEFT TO RIGHT
+        # ROW 1
+        0x3E: ['\\', '|', '′', ''],
+        # F1 through F12 generate the following scan codes with an
+        # 0x6F prefix, so position 5 (EXTRA) is used for those keys.
+        # The escape sequences in position 5 correspond to the "xterm"
+        # terminfo entry's key_f1 through key_f12.  F13 through F24
+        # generate the same scan codes but with a shift key down/make
+        # scan code prefix; there is no way to specify handling of the
+        # combination of Shift + EXTRA.
+        0x31: ['1', '!', '¹', '',         None, 'OP'],
+        0x32: ['2', '"', '²', '',         None, 'OQ'],
+        0x33: ['3', '£', '³', '',         None, 'OR'],
+        0x34: ['4', '$', '¼', '',         None, 'OS'],
+        0x35: ['5', '%', '½', '',         None, '[15~'],
+        0x36: ['6', '&', '¬', chr(0x1E),  None, '[17~'],
+        0x37: ['7', '/', '{', '',         None, '[18~'],
+        0x38: ['8', '(', '[', '',         None, '[19~'],
+        0x39: ['9', ')', ']', '',         None, '[20~'],
+        0x3A: ['0', '=', '}', '',         None, '[21~'],
+        0x3B: ["''", '?', '\\', chr(0x1F), None, '[23~'],
+        0x3C: ['ì', '^', '¸', '',         None, '[24~'],
+        0x3D: [chr(0x08), chr(0x08), '', ''],  # BS
+        # ROW 2
+        0x20: [chr(0x09), chr(0x09), '', ''],  # TAB
+        0x21: ['q', 'Q', '@', chr(0x11), None, 'q'],
+        0x22: ['w', 'W', 'ł', chr(0x17), None, 'w'],
+        0x23: ['e', 'E', '€', chr(0x05), None, 'e'],
+        0x24: ['r', 'R', '¶', chr(0x12), None, 'r'],
+        0x25: ['t', 'T', 'ŧ', chr(0x14), None, 't'],
+        0x26: ['y', 'Y', '←', chr(0x19), None, 'y'],
+        0x27: ['u', 'U', '↓', chr(0x15), None, 'u'],
+        0x28: ['i', 'I', '→', chr(0x09), None, 'i'],
+        0x29: ['o', 'O', 'ø', chr(0x0F), None, 'o'],
+        0x2A: ['p', 'P', 'þ', chr(0x10), None, 'p'],
+        0x2B: ['è', 'é', '~', chr(0x1D)],
+        0x2C: ['*', '+', '~', chr(0x1C)],
+        0x2D: [chr(0x0D), chr(0x0D), '', ''],  # ENTER
+        # ROW 3
+        0x11: ['a', 'A', 'æ', chr(0x01), None, 'a'],
+        0x12: ['s', 'S', 'ſ', chr(0x13), None, 's'],
+        0x13: ['d', 'D', 'ð', chr(0x04), None, 'd'],
+        0x14: ['f', 'F', 'đ', chr(0x06), None, 'f'],
+        0x15: ['g', 'G', 'ŋ', chr(0x07), None, 'g'],
+        0x16: ['h', 'H', 'ħ', chr(0x08), None, 'h'],
+        0x17: ['j', 'J', '.', chr(0x0A), None, 'j'],
+        0x18: ['k', 'K', 'ĸ', chr(0x0B), None, 'k'],
+        0x19: ['l', 'L', 'ł', chr(0x0C), None, 'l'],
+        0x1A: ['ò', 'ç', '˝', ''],
+        0x1B: ['à', '°', '^', chr(0x1B)],
+        0x1C: ['ù', '§', '’', chr(0x1D)],
+        # ROW 4
+        0x0e: ['<', '>', '|', ''],
+        0x01: ['z', 'Z', '»',  chr(0x1A), None, 'z'],
+        0x02: ['x', 'X', '«',  chr(0x18), None, 'x'],
+        0x03: ['c', 'C', '¢',  chr(0x03), None, 'c'],
+        0x04: ['v', 'V', '„',  chr(0x16), None, 'v'],
+        0x05: ['b', 'B', '“”', chr(0x02), None, 'b'],
+        0x06: ['n', 'N', '”',  chr(0x0E), None, 'n'],
+        0x07: ['m', 'M', 'µ',  chr(0x0D), None, 'm'],
+        0x08: [',', ';', '·', '',         None, ','],
+        0x09: ['.', ':', '…', '',         None, '.'],
+        0x0a: ['-', '_', '–', chr(0x1F)],
+        # ROW 5
+        0x0F: [' ', ' ', '', chr(0x00)],  # SPACE BAR
+
+
+        # TEXT EDIT MODE KEYS BLOCK MAPPINGS
+        # KEYS FROM TOP TO BOTTOM AND FROM LEFT TO RIGHT
+        0x4b: [chr(0x1B), chr(0x1B), chr(0x1B), '', ''], #insert?
+        # 0x4c: [chr(0x1B), chr(0x1B), chr(0x1B), '', 'F'], # end works, DUP on kb
+        # 0x62: [chr(0x1B), chr(0x1B), chr(0x1B), '', ''], # blank
+        0xc: [chr(0x1b), chr(0x1b), chr(0x1b), '', chr(0x7F)], # delete line
+        # 0x6c: [chr(0x1b), chr(0x1b), chr(0x1b), '', ''], #
+        # 0x57: [chr(0x1B), chr(0x1B), chr(0x1B), '', ''], #
+        # 0x6c
+
+        # ARROW KEYS BLOCK MAPPINGS
+        # KEYS FROM TOP TO BOTTOM AND FROM LEFT TO RIGHT
+        0x71: [chr(0x1B), chr(0x1B), chr(0x1B), '', 'A'],  # UP ARROW
+        0x72: [chr(0x1B), chr(0x1B), chr(0x1B), '', 'D'],  # LEFT ARROW
+        # TBD CENTER ARROW
+        0x73: [chr(0x1B), chr(0x1B), chr(0x1B), '', 'C'],  # RIGHT ARROW
+        0x70: [chr(0x1B), chr(0x1B), chr(0x1B), '', 'B'],  # DOWN ARROW
+
+        # NUMPAD KEYS BLOCK MAPPINGS
+        # KEYS FROM TOP TO BOTTOM AND FROM LEFT TO RIGHT
+        # ROW 1 (ALL BLANK)
+        # 0x1D is in the position of Num Lock on a 101 key keyboard,
+        # so do nothing with it
+        0x1E: ['/', '/', '', ''],
+        0x4F: ['*', '*', '', ''],
+        0x50: ['-', '-', '', ''],
+        # ROW 2
+        0x47: ['7', '7', '', ''],
+        # NUMPAD 8  EXTRA UP ARROW
+        0x48: ['8', '8', chr(0x1B), chr(0x1B), 'A'],
+        0x49: ['9', '9', '', ''],
+        0x7B: ['+', '+', '', ''],
+        # ROW 3
+        # NUMPAD 4   EXTRA LEFT ARROW
+        0x44: ['4', '4', chr(0x1B), chr(0x1B), 'D'],
+        0x45: ['5', '5', '', ''],
+        0x46: ['6', '6', '', '', 'C'],  # NUMPAD 6 EXTRA RIGHT ARROW
+        # ROW 4
+        0x41: ['1', '1', '', ''],
+        # NUMPAD 2  EXTRA DOWN ARROW
+        0x42: ['2', chr(0x1B), chr(0x1B), '', 'B'],
+        0x43: ['3', '3', '', ''],
+        0x2D: [chr(0x0D), '', '', ''],  # ENTER
+        # ROW 5
+        0x40: ['0', '0', '', ''],
+        0x4A: ['.', '', '', ''],
+
+        # Custom character conversions, from ASCII char to EBCDIC code that
+        # will override the DEFAULT_CODEPAGE conversions
+        'CUSTOM_CHARACTER_CONVERSIONS': {
+        },
+    },
+
+
     # ENTER HERE YOUR ADDITIONAL SCANCODE MAPPINGS
 
 }
