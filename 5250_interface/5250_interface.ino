@@ -304,7 +304,32 @@ static inline void debug_message(const char *msg, ...)
   va_end(ap);
 }
 
-static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
+enum class Errors{
+  NOERROR = 0,
+  ERRORTOOMANYFRAME,
+  ERRORPROCESSINGTOOSLOW,
+  ERRORTRANSITION,
+  ERRORPARITY,
+  ERRORSYNC,
+
+  WARNRESIDUALCYCLES,
+
+  ERRORCOUNT
+};
+struct Error5250 {
+  uint64_t  errors;
+  unsigned long cycles;
+  int indexTX;
+  int residualCycles;
+  int receptionIsActive;
+  int consecutiveSamples;
+
+  void setError(Errors e) { errors |= 1<<(int)e;}
+  bool checkError(Errors e) { return !! (errors & 1<<(int)e);}
+  void clearError() { *this = {0}; }
+};
+
+static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, struct Error5250 &error)
 {
   unsigned int halfBitsDataEven = 0;
   uint8_t sampleRead;
@@ -318,13 +343,15 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
   unsigned long  cyclesCurrent = ARM_DWT_CYCCNT;
   unsigned long  cyclesPrevious = cyclesCurrent;
   bool err = false;
+  unsigned long residual_cycles = 0;
+
+  error.clearError();
 
 #ifdef RESIDUAL_CYCLES_LOG
   static int check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
-  unsigned int residual_cycles = 0;
 #endif
 
-    //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
+  //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
   while (!err && (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX)))  // WAIT_CYCLES_RX = 30000
   {
 
@@ -336,20 +363,22 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
 
     cyclesCurrent = ARM_DWT_CYCCNT;
 
-#ifdef RESIDUAL_CYCLES_LOG
     residual_cycles = cyclesCurrent - cyclesPrevious;
+#ifdef RESIDUAL_CYCLES_LOG
     if (--check_count < 0)
     {
-        check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;       
+        check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
     }
 #endif
 
-    if (cyclesCurrent - cyclesPrevious >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
+    if (residual_cycles >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
     {
       //Processing has been too slow, light LED and inform
       digitalWriteFast(PIN_OVERFLOW, HIGH);
-      debug_message("ERROR, PROCESSING TOO SLOW %lu",
-            cyclesCurrent - cyclesPrevious);
+      error.setError(Errors::ERRORPROCESSINGTOOSLOW);
+      error.cycles = residual_cycles;
+      error.receptionIsActive = receptionIsActive;
+      error.consecutiveSamples = consecutiveSamples;
 
       err = true;
       goto exit;
@@ -430,28 +459,28 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
               // Detect incorrect intrabit transitions
               if (oddSampleActive == sampleActive )
               {
-                //prevSampleActive = sampleActive;
                 digitalWriteFast(PIN_OVERFLOW, HIGH);
-                debug_message("ERROR TRANSICIONES %d", indexTx);
+                error.setError(Errors::ERRORTRANSITION);
+                error.indexTX = indexTx;
+
                 err = true;
                 goto exit;
               }
 
               halfBitsDataEven <<= 1;
               halfBitsDataEven += sampleActive;
+              if (halfBitsDataReceived == 32)
+              {
+                //We have received a full frame
+                halfBitsDataTx[indexTx] = halfBitsDataEven;
+                indexTx++;
+                halfBitsDataReceived = 0;
+                halfBitsDataEven = 0;
+              }
             }
             else
             {
               oddSampleActive = sampleActive;
-            }
-
-            if (halfBitsDataReceived == 32)
-            {
-              //We have received a full frame
-              halfBitsDataTx[indexTx] = halfBitsDataEven;
-              indexTx++;
-              halfBitsDataReceived = 0;
-              halfBitsDataEven = 0;
             }
           }
         }
@@ -483,7 +512,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
         sequenceStartReceived = 0;
       }
     }
-
     else
     {
       //Check if we have stop sequence (Address 7)
@@ -493,16 +521,15 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
         break;
       }
 
-
       //Detect too many frames (unlikely)
       if (indexTx > MAX_FRAMES_RX)
       {
         digitalWriteFast(PIN_OVERFLOW, HIGH);
-        debug_message("MAX FRAMES ERROR");
+        //debug_message("MAX FRAMES ERROR");
+        error.setError(Errors::ERRORTOOMANYFRAME);
         err = true;
         goto exit;
       }
-
     }
   }
 
@@ -529,8 +556,9 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
       if (bitRead(halfBitsDataTx[i], 3) != parityBit)
       {
         //Parity error, light LED
-        debug_message("PARITY ERROR");
         digitalWriteFast(PIN_OVERFLOW, HIGH);
+        error.setError(Errors::ERRORPARITY);
+
         err = true;
         break;
       }
@@ -539,7 +567,8 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx)
       if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
       {
         digitalWriteFast(PIN_OVERFLOW, HIGH);
-        debug_message("SYNC ERROR ODD");
+        //debug_message("SYNC ERROR ODD");
+        error.setError(Errors::ERRORSYNC);
         err = true;
         break;
       }
@@ -553,8 +582,8 @@ exit:
 #ifdef RESIDUAL_CYCLES_LOG
   if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 50)
   {
-    debug_message("residual_cycles = %u",
-          residual_cycles);
+    error.setError(Errors::WARNRESIDUALCYCLES);
+    error.residualCycles = residual_cycles;
     residual_cycles = 0;
   }
 #endif
@@ -599,12 +628,15 @@ void loop() // run over and over
         }
     }
 
+    struct Error5250 error5250;
+    error5250.clearError();
+
     if (waitForResponse) {
 
       unsigned int halfBitsDataTx[MAX_FRAMES_RX+10];
       int lenTx = 0;
 
-      read_from_5250(halfBitsDataTx, lenTx);
+      read_from_5250(halfBitsDataTx, lenTx, error5250);
 
       //Transmission to serial
       if (lenTx > 0)
@@ -614,7 +646,35 @@ void loop() // run over and over
       }
     }
 
-    if (msg_debug[0]) {
+    if (error5250.checkError(Errors::ERRORTOOMANYFRAME))
+    {
+      debug_message("MAX FRAMES ERROR");
+    }
+    if (error5250.checkError(Errors::ERRORPROCESSINGTOOSLOW))
+    {
+      debug_message("ERRORPROCESSINGTOOSLOW: cycles=%d, receptionIsActive=%d,"
+                      " consecutiveSamples=%d",
+                    error5250.cycles, error5250.receptionIsActive,
+                      error5250.consecutiveSamples);
+    }
+    if (error5250.checkError(Errors::ERRORTRANSITION))
+    {
+      debug_message("ERRORTRANSITION: indexTx=%d", error5250.indexTX);
+    }
+    if (error5250.checkError(Errors::ERRORPARITY))
+    {
+      debug_message("ERRORPARITY");
+    }
+    if (error5250.checkError(Errors::ERRORPARITY))
+    {
+      debug_message("ERRORSYNC");
+    }
+    if (error5250.checkError(Errors::WARNRESIDUALCYCLES))
+    {
+      debug_message("WARNRESIDUALCYCLES: residualCycles=%d", error5250.residualCycles);
+    }
+    if (msg_debug[0])
+    {
       interrupts();
       Serial.print("[DEBUG] ");
       Serial.println(msg_debug);
