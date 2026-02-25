@@ -173,7 +173,6 @@ static inline void read_from_serial(word *bufferRX, bool &waitForResponse, int &
   }
 
   buffer[numCharsRecv] = '\0';
-  String mystring(buffer);
 
   if (ENABLEDEBUG) Serial.print("[DEBUG] RECEIVED : ");
   if (ENABLEDEBUG) Serial.print(numCharsRecv, DEC);
