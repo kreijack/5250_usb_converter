@@ -581,8 +581,6 @@ exit:
 //MAIN LOOP
 void loop() // run over and over
 {
-  while (true)
-  {
 
     boolean waitForResponse = false;
     boolean signalEndTx = false;
@@ -669,5 +667,5 @@ void loop() // run over and over
 
     //And start of another processing cycle till the end of the universe
 
-  }
+
 }
