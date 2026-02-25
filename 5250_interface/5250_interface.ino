@@ -659,7 +659,7 @@ void loop() // run over and over
     {
       debug_message("ERRORPARITY");
     }
-    if (error5250.checkError(Errors::ERRORPARITY))
+    if (error5250.checkError(Errors::ERRORSYNC))
     {
       debug_message("ERRORSYNC");
     }
