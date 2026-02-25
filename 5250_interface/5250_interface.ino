@@ -343,8 +343,8 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
   boolean receptionIsActive = false;
   int halfBitsDataReceived = 0;
   unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
-  unsigned long  cyclesCurrent = ARM_DWT_CYCCNT;
-  unsigned long  cyclesPrevious = cyclesCurrent;
+  unsigned long  cyclesCurrent = cyclesBeginReception;
+
   unsigned long residual_cycles = 0;
 
   error.clearError();
@@ -363,9 +363,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
       break;
     }
 
-    cyclesCurrent = ARM_DWT_CYCCNT;
-
-    residual_cycles = cyclesCurrent - cyclesPrevious;
+    residual_cycles = ARM_DWT_CYCCNT - cyclesCurrent;
 #ifdef RESIDUAL_CYCLES_LOG
     if (--check_count < 0)
     {
@@ -386,15 +384,18 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
     }
 
     //Wait till it's time to get another sample from RX-DAT-INV
-    while (cyclesCurrent - cyclesPrevious < WAIT_CYCLES_RX_SAMPLE) // WAIT_CYCLES_RX_SAMPLE = 85
+
+    const auto target = cyclesCurrent + WAIT_CYCLES_RX_SAMPLE;
+    if (cyclesCurrent > target)
     {
-      cyclesCurrent = ARM_DWT_CYCCNT;
+      // overflow, wait until the counter reach 0
+      while (ARM_DWT_CYCCNT > target);
     }
+    while (ARM_DWT_CYCCNT < target);
+    cyclesCurrent = ARM_DWT_CYCCNT;
 
     //Sample RX-DAT-INV
     sampleRead = digitalReadFast(PIN_IN);
-
-    cyclesPrevious = cyclesCurrent;
 
     //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
     //Otherwise we have a sync error
