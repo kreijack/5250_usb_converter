@@ -199,6 +199,14 @@ static inline void read_from_serial(word *bufferRX, bool &waitForResponse, int &
 
 }
 
+static unsigned int inline checkParity(word w)
+{
+    const auto check1 = parity_even_bit(w);
+    const auto check2 = parity_even_bit(w >> 8);
+
+    return check1 != check2;
+}
+
 static inline void write_to_5250(word *bufferRX, int index)
 {
    if (index <= 0)
@@ -227,14 +235,7 @@ static inline void write_to_5250(word *bufferRX, int index)
     bitWrite(bufferRX[i], 14, 0);
     bitWrite(bufferRX[i], 15, 0);
 
-    //parity
-    int parityBit = 0;
-    //if ((bufferRX[i] & 1) == 0)
-    if ((parity_even_bit(bufferRX[i]) && ! parity_even_bit(bufferRX[i] >> 8))  ||  (!parity_even_bit(bufferRX[i]) && parity_even_bit(bufferRX[i] >> 8)))
-    {
-      parityBit = 1;
-    }
-    bitWrite(bufferRX[i], 12, parityBit);
+    bitWrite(bufferRX[i], 12, checkParity(bufferRX[i]));
 
     //Transmission for each bit
     for (int j = 0; j < 16; j++)
@@ -536,21 +537,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
   {
 
     //Now some error checking
-
-    //Parity error detection
-    unsigned int parityBit=0;
-    word toCheck = halfBitsDataTx[i] <<1 >>5;
-      //if ((toCheck & 1) == 0)
-
-    unsigned int check1 = parity_even_bit(toCheck);
-    unsigned int check2 = parity_even_bit(toCheck >> 8);
-
-    if ((check1 && ! check2)  ||  (!check1 && check2))
-    {
-      parityBit=1;//TBD
-    }
-
-    if (bitRead(halfBitsDataTx[i], 3) != parityBit)
+    if (bitRead(halfBitsDataTx[i], 3) != checkParity(halfBitsDataTx[i] <<1 >>5))
     {
       //Parity error, light LED
       digitalWriteFast(PIN_OVERFLOW, HIGH);
