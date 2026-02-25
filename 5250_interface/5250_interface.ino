@@ -354,11 +354,17 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
 #endif
 
   //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-  while (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX))  // WAIT_CYCLES_RX = 30000
+  while (true)  // WAIT_CYCLES_RX = 30000
   {
-
+    const unsigned long delta = cyclesCurrent -  cyclesBeginReception;
+    if (!(receptionIsActive || (delta < WAIT_CYCLES_RX)))
+    {
+      break;
+    }
     //End earlier if no response expected
-    if (! receptionIsActive && Serial.available() && ((cyclesCurrent -  cyclesBeginReception) >= WAIT_CYCLES_RX_PENDING_TX)) // WAIT_CYCLES_RX_PENDING_TX = 5000
+    if (! receptionIsActive &&
+        Serial.available() &&
+        (delta >= WAIT_CYCLES_RX_PENDING_TX)) // WAIT_CYCLES_RX_PENDING_TX = 5000
     {
       break;
     }
