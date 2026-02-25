@@ -57,6 +57,8 @@ const int PIN_IN = 7;
 const int ENABLEDEBUG = 0;
 char msg_debug[1000] = {0};
 
+#define RESIDUAL_CYCLES_LOG 1
+
 //Initialize things
 void setup()
 {
@@ -327,6 +329,7 @@ struct Error5250 {
   void setError(Errors e) { errors |= 1<<(int)e;}
   bool checkError(Errors e) { return !! (errors & 1<<(int)e);}
   void clearError() { *this = {0}; }
+  bool checkError() { return errors != 0; }
 };
 
 static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, struct Error5250 &error)
@@ -342,7 +345,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
   unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
   unsigned long  cyclesCurrent = ARM_DWT_CYCCNT;
   unsigned long  cyclesPrevious = cyclesCurrent;
-  bool err = false;
   unsigned long residual_cycles = 0;
 
   error.clearError();
@@ -352,7 +354,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
 #endif
 
   //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-  while (!err && (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX)))  // WAIT_CYCLES_RX = 30000
+  while (receptionIsActive || (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX))  // WAIT_CYCLES_RX = 30000
   {
 
     //End earlier if no response expected
@@ -380,7 +382,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
       error.receptionIsActive = receptionIsActive;
       error.consecutiveSamples = consecutiveSamples;
 
-      err = true;
       goto exit;
     }
 
@@ -463,7 +464,6 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
                 error.setError(Errors::ERRORTRANSITION);
                 error.indexTX = indexTx;
 
-                err = true;
                 goto exit;
               }
 
@@ -525,55 +525,48 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
       if (indexTx > MAX_FRAMES_RX)
       {
         digitalWriteFast(PIN_OVERFLOW, HIGH);
-        //debug_message("MAX FRAMES ERROR");
         error.setError(Errors::ERRORTOOMANYFRAME);
-        err = true;
         goto exit;
       }
     }
   }
 
-  if (!err)
+  for (int i = 0 ; i < indexTx ; i++)
   {
-    for (int i = 0 ; i < indexTx ; i++)
+
+    //Now some error checking
+
+    //Parity error detection
+    unsigned int parityBit=0;
+    word toCheck = halfBitsDataTx[i] <<1 >>5;
+      //if ((toCheck & 1) == 0)
+
+    unsigned int check1 = parity_even_bit(toCheck);
+    unsigned int check2 = parity_even_bit(toCheck >> 8);
+
+    if ((check1 && ! check2)  ||  (!check1 && check2))
     {
-
-      //Now some error checking
-
-      //Parity error detection
-      unsigned int parityBit=0;
-      word toCheck = halfBitsDataTx[i] <<1 >>5;
-        //if ((toCheck & 1) == 0)
-
-      unsigned int check1 = parity_even_bit(toCheck);
-      unsigned int check2 = parity_even_bit(toCheck >> 8);
-
-      if ((check1 && ! check2)  ||  (!check1 && check2))
-      {
-        parityBit=1;//TBD
-      }
-
-      if (bitRead(halfBitsDataTx[i], 3) != parityBit)
-      {
-        //Parity error, light LED
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        error.setError(Errors::ERRORPARITY);
-
-        err = true;
-        break;
-      }
-
-      //Detection of incorrect frame alignment, light LED
-      if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        //debug_message("SYNC ERROR ODD");
-        error.setError(Errors::ERRORSYNC);
-        err = true;
-        break;
-      }
-
+      parityBit=1;//TBD
     }
+
+    if (bitRead(halfBitsDataTx[i], 3) != parityBit)
+    {
+      //Parity error, light LED
+      digitalWriteFast(PIN_OVERFLOW, HIGH);
+      error.setError(Errors::ERRORPARITY);
+
+      goto exit;
+    }
+
+    //Detection of incorrect frame alignment, light LED
+    if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
+    {
+      digitalWriteFast(PIN_OVERFLOW, HIGH);
+      error.setError(Errors::ERRORSYNC);
+
+      goto exit;
+    }
+
   }
 
 
@@ -588,7 +581,7 @@ exit:
   }
 #endif
 
-  if (err) {
+  if (error.checkError()) {
     cyclesCurrent = ARM_DWT_CYCCNT;
     indexTx = 0;
     while (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX) // WAIT_CYCLES_RX = 30000
