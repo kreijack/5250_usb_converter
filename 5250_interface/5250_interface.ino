@@ -332,6 +332,34 @@ struct Error5250 {
   bool checkError() { return errors != 0; }
 };
 
+static inline void checkParitySyncError(unsigned int *halfBitsDataTx, int indexTx,
+                                        struct Error5250 &error)
+{
+  for (int i = 0 ; i < indexTx ; i++)
+  {
+
+    //Now some error checking
+    if (bitRead(halfBitsDataTx[i], 3) != checkParity(halfBitsDataTx[i] <<1 >>5))
+    {
+      //Parity error, light LED
+      digitalWriteFast(PIN_OVERFLOW, HIGH);
+      error.setError(Errors::ERRORPARITY);
+
+      return;
+    }
+
+    //Detection of incorrect frame alignment, light LED
+    if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
+    {
+      digitalWriteFast(PIN_OVERFLOW, HIGH);
+      error.setError(Errors::ERRORSYNC);
+
+      return;
+    }
+
+  }
+}
+
 static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, struct Error5250 &error)
 {
   unsigned int halfBitsDataEven = 0;
@@ -538,30 +566,8 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
     }
   }
 
-  for (int i = 0 ; i < indexTx ; i++)
-  {
-
-    //Now some error checking
-    if (bitRead(halfBitsDataTx[i], 3) != checkParity(halfBitsDataTx[i] <<1 >>5))
-    {
-      //Parity error, light LED
-      digitalWriteFast(PIN_OVERFLOW, HIGH);
-      error.setError(Errors::ERRORPARITY);
-
-      goto exit;
-    }
-
-    //Detection of incorrect frame alignment, light LED
-    if ((halfBitsDataTx[i] & maskFrame) != sequenceFrameOdd)
-    {
-      digitalWriteFast(PIN_OVERFLOW, HIGH);
-      error.setError(Errors::ERRORSYNC);
-
-      goto exit;
-    }
-
-  }
-
+  // check parity and sync error, then set 'error' properly
+  checkParitySyncError(halfBitsDataTx, indexTx, error);
 
 exit:
 
