@@ -360,12 +360,27 @@ static inline void checkParitySyncError(unsigned int *halfBitsDataTx, int indexT
   }
 }
 
-static inline bool parse5250Data(int &consecutiveSamples, const uint8_t sampleRead,
-                                 uint8_t &sampleActive, boolean &receptionIsActive,
-                                 int &halfBitsDataReceived, unsigned int &halfBitsDataEven,
-                                 uint8_t &oddSampleActive, word &sequenceStartReceived,
-                                 int &indexTx, unsigned int *halfBitsDataTx,
-                                 struct Error5250 &error)
+/*
+ * The parsing of a frame is composed by several steps, each one with an internal
+ * state. So there is dignity to make a class for parsing a frame
+ */
+struct Parse5250Frame {
+    int consecutiveSamples = 0;
+    uint8_t sampleActive = HIGH;
+    uint8_t oddSampleActive = HIGH;
+    int halfBitsDataReceived = 0;
+    unsigned int halfBitsDataEven = 0;
+    word sequenceStartReceived = 0;
+    boolean receptionIsActive = false;
+
+    inline bool parse(const uint8_t sampleRead, int &indexTx,
+                      unsigned int *halfBitsDataTx, struct Error5250 &error);
+
+};
+
+inline bool Parse5250Frame::parse(const uint8_t sampleRead,
+                                  int &indexTx, unsigned int *halfBitsDataTx,
+                                  struct Error5250 &error)
 {
 
     //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
@@ -505,109 +520,91 @@ static inline bool parse5250Data(int &consecutiveSamples, const uint8_t sampleRe
     return false;
 }
 
-
 static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, struct Error5250 &error)
 {
-  unsigned int halfBitsDataEven = 0;
 
-  uint8_t sampleRead;
-  int consecutiveSamples = 0;
-  uint8_t sampleActive = HIGH;
-  uint8_t oddSampleActive = HIGH;
-  word sequenceStartReceived = 0;
-  boolean receptionIsActive = false;
-  int halfBitsDataReceived = 0;
+    Parse5250Frame  parse5250Frame;
 
+    unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
+    unsigned long  cyclesCurrent = cyclesBeginReception;
 
-  unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
-  unsigned long  cyclesCurrent = cyclesBeginReception;
+    unsigned long residual_cycles = 0;
 
-  unsigned long residual_cycles = 0;
-
-  error.clearError();
+    error.clearError();
 
 #ifdef RESIDUAL_CYCLES_LOG
-  static int check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
+    static int check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
 #endif
 
-  //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-  while (true)  // WAIT_CYCLES_RX = 30000
-  {
-    const unsigned long delta = cyclesCurrent -  cyclesBeginReception;
-    if (!(receptionIsActive || (delta < WAIT_CYCLES_RX)))
+    while (true)
     {
-      break;
-    }
-    //End earlier if no response expected
-    if (! receptionIsActive &&
-        Serial.available() &&
-        (delta >= WAIT_CYCLES_RX_PENDING_TX)) // WAIT_CYCLES_RX_PENDING_TX = 5000
-    {
-      break;
-    }
+        //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
+        const unsigned long delta = cyclesCurrent -  cyclesBeginReception;
+        if (!(parse5250Frame.receptionIsActive || (delta < WAIT_CYCLES_RX))) // WAIT_CYCLES_RX = 30000
+        {
+            break;
+        }
+        //End earlier if no response expected
+        if (! parse5250Frame.receptionIsActive &&
+            Serial.available() &&
+            (delta >= WAIT_CYCLES_RX_PENDING_TX)) // WAIT_CYCLES_RX_PENDING_TX = 5000
+        {
+            break;
+        }
 
-    residual_cycles = ARM_DWT_CYCCNT - cyclesCurrent;
+        residual_cycles = ARM_DWT_CYCCNT - cyclesCurrent;
 #ifdef RESIDUAL_CYCLES_LOG
-    if (--check_count < 0)
-    {
-        check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
-    }
+        if (--check_count < 0)
+        {
+            check_count = TIMEOUT_CHECK_RESIDUAL_CYCLES;
+        }
 #endif
 
-    if (residual_cycles >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
-    {
-      //Processing has been too slow, light LED and inform
-      digitalWriteFast(PIN_OVERFLOW, HIGH);
-      error.setError(Errors::ERRORPROCESSINGTOOSLOW);
-      error.cycles = residual_cycles;
-      error.receptionIsActive = receptionIsActive;
-      error.consecutiveSamples = consecutiveSamples;
+        if (residual_cycles >= WAIT_CYCLES_RX_SAMPLE)  // WAIT_CYCLES_RX_SAMPLE = 85
+        {
+            //Processing has been too slow, light LED and inform
+            digitalWriteFast(PIN_OVERFLOW, HIGH);
+            error.setError(Errors::ERRORPROCESSINGTOOSLOW);
+            error.cycles = residual_cycles;
+            error.receptionIsActive = parse5250Frame.receptionIsActive;
+            error.consecutiveSamples = parse5250Frame.consecutiveSamples;
 
-      break;
+            break;
+        }
+
+        //Wait till it's time to get another sample from RX-DAT-INV
+        const auto target = cyclesCurrent + WAIT_CYCLES_RX_SAMPLE;
+        while ((int32_t)(ARM_DWT_CYCCNT - target) < 0);
+        cyclesCurrent = ARM_DWT_CYCCNT;
+
+        //Sample RX-DAT-INV
+        const uint8_t sampleRead = digitalReadFast(PIN_IN);
+
+        if (parse5250Frame.parse(sampleRead, indexTx, halfBitsDataTx, error))
+            break;
     }
 
-    //Wait till it's time to get another sample from RX-DAT-INV
-
-    const auto target = cyclesCurrent + WAIT_CYCLES_RX_SAMPLE;
-    if (cyclesCurrent > target)
-    {
-      // overflow, wait until the counter reach 0
-      while (ARM_DWT_CYCCNT > target);
-    }
-    while (ARM_DWT_CYCCNT < target);
-    cyclesCurrent = ARM_DWT_CYCCNT;
-
-    //Sample RX-DAT-INV
-    sampleRead = digitalReadFast(PIN_IN);
-
-    if (parse5250Data(consecutiveSamples, sampleRead, sampleActive, receptionIsActive,
-                      halfBitsDataReceived, halfBitsDataEven, oddSampleActive,
-                      sequenceStartReceived, indexTx, halfBitsDataTx, error))
-        break;
-
-  }
-
-  // check parity and sync error, then set 'error' properly
-  if (!error.checkError())
-    checkParitySyncError(halfBitsDataTx, indexTx, error);
+    // check parity and sync error, then set 'error' properly
+    if (!error.checkError())
+        checkParitySyncError(halfBitsDataTx, indexTx, error);
 
 #ifdef RESIDUAL_CYCLES_LOG
-  if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 70)
-  {
-    error.setError(Errors::WARNRESIDUALCYCLES);
-    error.residualCycles = residual_cycles;
-    residual_cycles = 0;
-  }
+    if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 70)
+    {
+        error.setError(Errors::WARNRESIDUALCYCLES);
+        error.residualCycles = residual_cycles;
+        residual_cycles = 0;
+    }
 #endif
 
-  if (error.checkError()) {
-    cyclesCurrent = ARM_DWT_CYCCNT;
-    indexTx = 0;
-    while (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX) // WAIT_CYCLES_RX = 30000
-    {
-      cyclesCurrent = ARM_DWT_CYCCNT;
+    if (error.checkError()) {
+        cyclesCurrent = ARM_DWT_CYCCNT;
+        indexTx = 0;
+        while (cyclesCurrent -  cyclesBeginReception < WAIT_CYCLES_RX) // WAIT_CYCLES_RX = 30000
+        {
+            cyclesCurrent = ARM_DWT_CYCCNT;
+        }
     }
-  }
 }
 
 //MAIN LOOP
