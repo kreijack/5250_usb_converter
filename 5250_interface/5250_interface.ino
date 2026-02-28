@@ -184,7 +184,9 @@ static inline void read_from_serial(word *bufferRX, bool &waitForResponse, int &
   //Process buffer to decode and split into frames
   int i = 0;
   index = 0;
-  while (i < numCharsRecv)
+
+  // TBD: what happens if numCharsRecv is odd ?
+  while (i + 1 < numCharsRecv)
   {
     bufferRX[index] = (buffer[i] & 0x3f) | ((buffer[i + 1] & 0x1F) << 6);
     if (ENABLEDEBUG) Serial.print(" DECODED : ");
@@ -198,7 +200,7 @@ static inline void read_from_serial(word *bufferRX, bool &waitForResponse, int &
 
 }
 
-static unsigned int inline checkParity(word w)
+static unsigned int inline checkFrameParity(word w)
 {
     const auto check1 = parity_even_bit(w);
     const auto check2 = parity_even_bit(w >> 8);
@@ -234,7 +236,7 @@ static inline void write_to_5250(word *bufferRX, int index)
     bitWrite(bufferRX[i], 14, 0);
     bitWrite(bufferRX[i], 15, 0);
 
-    bitWrite(bufferRX[i], 12, checkParity(bufferRX[i]));
+    bitWrite(bufferRX[i], 12, checkFrameParity(bufferRX[i]));
 
     //Transmission for each bit
     for (int j = 0; j < 16; j++)
@@ -339,7 +341,7 @@ static inline void checkParitySyncError(unsigned int *halfBitsDataTx, int indexT
   {
 
     //Now some error checking
-    if (bitRead(halfBitsDataTx[i], 3) != checkParity(halfBitsDataTx[i] <<1 >>5))
+    if (bitRead(halfBitsDataTx[i], 3) != checkFrameParity(halfBitsDataTx[i] <<1 >>5))
     {
       //Parity error, light LED
       digitalWriteFast(PIN_OVERFLOW, HIGH);
