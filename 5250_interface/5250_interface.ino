@@ -321,15 +321,15 @@ enum class Errors{
   ERRORCOUNT
 };
 struct Error5250 {
-  uint64_t  errors;
+  uint32_t  errors;
   unsigned long cycles;
   int indexTX;
   int residualCycles;
   int receptionIsActive;
   int consecutiveSamples;
 
-  void setError(Errors e) { errors |= 1<<(int)e;}
-  bool checkError(Errors e) { return !! (errors & 1<<(int)e);}
+  void setError(Errors e) { errors |= 1u<<(int)e;}
+  bool checkError(Errors e) { return !! (errors & 1u<<(int)e);}
   void clearError() { *this = {0}; }
   bool checkError() { return errors != 0; }
 };
