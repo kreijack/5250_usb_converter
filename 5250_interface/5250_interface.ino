@@ -267,7 +267,7 @@ static inline void write_to_serial(unsigned int *halfBitsDataTx, int indexTx)
       Serial.print("[DEBUG] EVEN ");
       for (int j = 0; j < 16; j++)
       {
-        if (halfBitsDataTx[i] < pow(2, j))
+        if (halfBitsDataTx[i] < (1U << j))
           Serial.print("0");
       }
 
