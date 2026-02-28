@@ -360,9 +360,156 @@ static inline void checkParitySyncError(unsigned int *halfBitsDataTx, int indexT
   }
 }
 
+static inline bool parse5250Data(int &consecutiveSamples, const uint8_t sampleRead,
+                                 uint8_t &sampleActive, boolean &receptionIsActive,
+                                 int &halfBitsDataReceived, unsigned int &halfBitsDataEven,
+                                 uint8_t &oddSampleActive, word &sequenceStartReceived,
+                                 int &indexTx, unsigned int *halfBitsDataTx,
+                                 struct Error5250 &error)
+{
+
+    //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
+    //Otherwise we have a sync error
+    switch (consecutiveSamples)
+    {
+
+        case 0:
+            //New half-bit
+            sampleActive = sampleRead;
+            consecutiveSamples++;
+            break;
+
+        case 1:
+            //second sample
+            if (sampleActive != sampleRead)
+            {
+                //Out of sync!
+                sampleActive = sampleRead;
+                consecutiveSamples = 1;
+            }
+            else
+            {
+                consecutiveSamples++;
+            }
+            break;
+        case 2:
+
+            //third sample
+            if (sampleActive != sampleRead)
+            {
+                //Out of sync!
+                sampleActive = sampleRead;
+                consecutiveSamples = 1;
+            }
+            else
+            {
+
+                consecutiveSamples++;
+                //New half-bit!
+                if (!receptionIsActive)
+                {
+                    //Add half-bit to start sequence detection
+                    sequenceStartReceived <<= 1;
+                    sequenceStartReceived += sampleActive;
+
+                }
+                else
+                {
+
+                    //Already got start sequence, add to received data, odd or even half bits
+                    halfBitsDataReceived++;
+
+                    //If we are starting a frame wait till the first even half bit is 0
+                    if (halfBitsDataReceived == 2 && sampleActive == 0) {
+                        halfBitsDataReceived = 0;
+                        halfBitsDataEven = 0;
+                        break;
+                    }
+
+                    if ((halfBitsDataReceived % 2) == 0)
+                    {
+
+                        // Detect incorrect intrabit transitions
+                        if (oddSampleActive == sampleActive )
+                        {
+                            digitalWriteFast(PIN_OVERFLOW, HIGH);
+                            error.setError(Errors::ERRORTRANSITION);
+                            error.indexTX = indexTx;
+
+                            return true;
+                        }
+
+                        halfBitsDataEven <<= 1;
+                        halfBitsDataEven += sampleActive;
+                        if (halfBitsDataReceived == 32)
+                        {
+                            //We have received a full frame
+                            halfBitsDataTx[indexTx] = halfBitsDataEven;
+                            indexTx++;
+                            halfBitsDataReceived = 0;
+                            halfBitsDataEven = 0;
+                        }
+                    }
+                    else
+                    {
+                        oddSampleActive = sampleActive;
+                    }
+                }
+            }
+            break;
+
+        case 3:
+            //fourth and last value of half-bit
+            if (sampleActive != sampleRead)
+            {
+                sampleActive = sampleRead;
+                consecutiveSamples = 1;
+            }
+            else
+            {
+                consecutiveSamples = 1;
+            }
+            break;
+    }
+
+    //Check if we have received start sequence
+    if (!receptionIsActive)
+    {
+
+        if ((sequenceStartReceived & 0xFFFF) == sequenceStart)
+        {
+            //Signal that we are now sampling the data frame
+            receptionIsActive = true;
+            //Reset holder
+            sequenceStartReceived = 0;
+        }
+    }
+    else
+    {
+        //Check if we have stop sequence (Address 7)
+        if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskEnd) == sequenceEnd)
+        {
+            //No more reception
+            return true;
+        }
+
+        //Detect too many frames (unlikely)
+        if (indexTx > MAX_FRAMES_RX)
+        {
+            digitalWriteFast(PIN_OVERFLOW, HIGH);
+            error.setError(Errors::ERRORTOOMANYFRAME);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, struct Error5250 &error)
 {
   unsigned int halfBitsDataEven = 0;
+
   uint8_t sampleRead;
   int consecutiveSamples = 0;
   uint8_t sampleActive = HIGH;
@@ -370,6 +517,8 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
   word sequenceStartReceived = 0;
   boolean receptionIsActive = false;
   int halfBitsDataReceived = 0;
+
+
   unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
   unsigned long  cyclesCurrent = cyclesBeginReception;
 
@@ -414,7 +563,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
       error.receptionIsActive = receptionIsActive;
       error.consecutiveSamples = consecutiveSamples;
 
-      goto exit;
+      break;
     }
 
     //Wait till it's time to get another sample from RX-DAT-INV
@@ -431,148 +580,19 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
     //Sample RX-DAT-INV
     sampleRead = digitalReadFast(PIN_IN);
 
-    //Manage samples. If we get three or four consecutive samples at the same level we have a new half-bit
-    //Otherwise we have a sync error
-    switch (consecutiveSamples)
-    {
-
-      case 0:
-        //New half-bit
-        sampleActive = sampleRead;
-        consecutiveSamples++;
+    if (parse5250Data(consecutiveSamples, sampleRead, sampleActive, receptionIsActive,
+                      halfBitsDataReceived, halfBitsDataEven, oddSampleActive,
+                      sequenceStartReceived, indexTx, halfBitsDataTx, error))
         break;
 
-      case 1:
-        //second sample
-        if (sampleActive != sampleRead)
-        {
-          //Out of sync!
-          sampleActive = sampleRead;
-          consecutiveSamples = 1;
-        }
-        else
-        {
-          consecutiveSamples++;
-        }
-        break;
-      case 2:
-
-        //third sample
-        if (sampleActive != sampleRead)
-        {
-          //Out of sync!
-          sampleActive = sampleRead;
-          consecutiveSamples = 1;
-        }
-        else
-        {
-
-          consecutiveSamples++;
-          //New half-bit!
-          if (!receptionIsActive)
-          {
-            //Add half-bit to start sequence detection
-            sequenceStartReceived <<= 1;
-            sequenceStartReceived += sampleActive;
-
-          }
-          else
-          {
-
-            //Already got start sequence, add to received data, odd or even half bits
-            halfBitsDataReceived++;
-
-            //If we are starting a frame wait till the first even half bit is 0
-            if (halfBitsDataReceived == 2 && sampleActive == 0) {
-              halfBitsDataReceived = 0;
-              halfBitsDataEven = 0;
-              break;
-            }
-
-            if ((halfBitsDataReceived % 2) == 0)
-            {
-
-              // Detect incorrect intrabit transitions
-              if (oddSampleActive == sampleActive )
-              {
-                digitalWriteFast(PIN_OVERFLOW, HIGH);
-                error.setError(Errors::ERRORTRANSITION);
-                error.indexTX = indexTx;
-
-                goto exit;
-              }
-
-              halfBitsDataEven <<= 1;
-              halfBitsDataEven += sampleActive;
-              if (halfBitsDataReceived == 32)
-              {
-                //We have received a full frame
-                halfBitsDataTx[indexTx] = halfBitsDataEven;
-                indexTx++;
-                halfBitsDataReceived = 0;
-                halfBitsDataEven = 0;
-              }
-            }
-            else
-            {
-              oddSampleActive = sampleActive;
-            }
-          }
-        }
-        break;
-
-      case 3:
-        //fourth and last value of half-bit
-        if (sampleActive != sampleRead)
-        {
-          sampleActive = sampleRead;
-          consecutiveSamples = 1;
-        }
-        else
-        {
-          consecutiveSamples = 1;
-        }
-        break;
-    }
-
-    //Check if we have received start sequence
-    if (!receptionIsActive)
-    {
-
-      if ((sequenceStartReceived & 0xFFFF) == sequenceStart)
-      {
-        //Signal that we are now sampling the data frame
-        receptionIsActive = true;
-        //Reset holder
-        sequenceStartReceived = 0;
-      }
-    }
-    else
-    {
-      //Check if we have stop sequence (Address 7)
-      if (indexTx > 0 && (halfBitsDataTx[indexTx - 1] & maskEnd) == sequenceEnd)
-      {
-        //No more reception
-        break;
-      }
-
-      //Detect too many frames (unlikely)
-      if (indexTx > MAX_FRAMES_RX)
-      {
-        digitalWriteFast(PIN_OVERFLOW, HIGH);
-        error.setError(Errors::ERRORTOOMANYFRAME);
-        goto exit;
-      }
-    }
   }
 
   // check parity and sync error, then set 'error' properly
-  checkParitySyncError(halfBitsDataTx, indexTx, error);
-
-exit:
+  if (!error.checkError())
+    checkParitySyncError(halfBitsDataTx, indexTx, error);
 
 #ifdef RESIDUAL_CYCLES_LOG
-  if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 50)
+  if (check_count == TIMEOUT_CHECK_RESIDUAL_CYCLES || residual_cycles > 70)
   {
     error.setError(Errors::WARNRESIDUALCYCLES);
     error.residualCycles = residual_cycles;
