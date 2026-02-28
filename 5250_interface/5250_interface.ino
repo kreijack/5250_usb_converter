@@ -324,7 +324,7 @@ struct Error5250 {
   uint32_t  errors;
   unsigned long cycles;
   int indexTX;
-  int residualCycles;
+  uint32_t residualCycles;
   int receptionIsActive;
   int consecutiveSamples;
 
@@ -527,10 +527,10 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
 
     Parse5250Frame  parse5250Frame;
 
-    unsigned long  cyclesBeginReception = ARM_DWT_CYCCNT;
-    unsigned long  cyclesCurrent = cyclesBeginReception;
+    uint32_t  cyclesBeginReception = ARM_DWT_CYCCNT;
+    uint32_t  cyclesCurrent = cyclesBeginReception;
 
-    unsigned long residual_cycles = 0;
+    uint32_t  residual_cycles = 0;
 
     error.clearError();
 
@@ -541,7 +541,7 @@ static inline void read_from_5250(unsigned int *halfBitsDataTx, int &indexTx, st
     while (true)
     {
         //We wait max WAIT_CYCLES_RX for a response, unless rx is already active
-        const unsigned long delta = cyclesCurrent -  cyclesBeginReception;
+        const uint32_t delta = cyclesCurrent -  cyclesBeginReception;
         if (!(parse5250Frame.receptionIsActive || (delta < WAIT_CYCLES_RX))) // WAIT_CYCLES_RX = 30000
         {
             break;
