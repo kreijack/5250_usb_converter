@@ -3750,9 +3750,12 @@ def udsServer():
     print(f"Making UDS socket available at {spath}.")
     print(f"Use e.g. `$ socat stdio UNIX:{spath}` to connect.")
 
-    while True:
-        cs, ca = s.accept()
-        _thread.start_new_thread(spawnCmd, (cs.makefile(mode="rw"),cs))
+    try:
+        while True:
+            cs, ca = s.accept()
+            _thread.start_new_thread(spawnCmd, (cs.makefile(mode="rw"),cs))
+    finally:
+        os.remove(spath)
 
 
 def parseTermDef(arg):
@@ -3976,4 +3979,3 @@ if __name__ == '__main__':
             pass
     else:
         MyPrompt(None).cmdloop()
-        os.remove(spath)
