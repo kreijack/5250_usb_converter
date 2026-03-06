@@ -57,7 +57,7 @@ const int PIN_IN = 7;
 const int ENABLEDEBUG = 0;
 char msg_debug[1000] = {0};
 
-#define RESIDUAL_CYCLES_LOG 1
+//#define RESIDUAL_CYCLES_LOG 1
 
 //Initialize things
 void setup()
